@@ -27,6 +27,7 @@ class WorldModel(nn.Module):
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.config = config
+        self._sls_cache = {}
         self.transformer = Transformer(config)
 
         all_but_last_obs_tokens_pattern = torch.ones(config.tokens_per_block)
@@ -94,7 +95,7 @@ class WorldModel(nn.Module):
 
         return WorldModelOutput(x, logits_observations, logits_rewards, logits_ends)
 
-    def compute_loss(self, batch: Batch, tokenizer: Tokenizer, **kwargs: Any) -> LossWithIntermediateLosses:
+    def compute_loss(self, batch: Batch, tokenizer: Tokenizer, sls_smoothing: float = 0.0, sls_kernel: str = "gaussian", sls_sigma: Optional[float] = None, sls_topk: int = 0, **kwargs: Any) -> LossWithIntermediateLosses:
 
         with torch.no_grad():
             obs_tokens = tokenizer.encode(batch['observations'], should_preprocess=True).tokens  # (BL, K)
@@ -107,11 +108,108 @@ class WorldModel(nn.Module):
         labels_observations, labels_rewards, labels_ends = self.compute_labels_world_model(obs_tokens, batch['rewards'], batch['ends'], batch['mask_padding'])
 
         logits_observations = rearrange(outputs.logits_observations[:, :-1], 'b t o -> (b t) o')
-        loss_obs = F.cross_entropy(logits_observations, labels_observations)
+        loss_obs = self.compute_observation_loss(
+            logits_observations,
+            labels_observations,
+            tokenizer,
+            sls_smoothing=sls_smoothing,
+            sls_kernel=sls_kernel,
+            sls_sigma=sls_sigma,
+            sls_topk=sls_topk,
+        )
         loss_rewards = F.cross_entropy(rearrange(outputs.logits_rewards, 'b t e -> (b t) e'), labels_rewards)
         loss_ends = F.cross_entropy(rearrange(outputs.logits_ends, 'b t e -> (b t) e'), labels_ends)
 
         return LossWithIntermediateLosses(loss_obs=loss_obs, loss_rewards=loss_rewards, loss_ends=loss_ends)
+
+    def compute_observation_loss(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        tokenizer: Tokenizer,
+        sls_smoothing: float = 0.0,
+        sls_kernel: str = "gaussian",
+        sls_sigma: Optional[float] = None,
+        sls_topk: int = 0,
+    ) -> torch.Tensor:
+        if sls_smoothing <= 0:
+            return F.cross_entropy(logits, labels)
+
+        valid = labels != -100
+        if not torch.any(valid):
+            return logits.sum() * 0.0
+
+        soft_target_matrix = self.get_sls_soft_target_matrix(
+            tokenizer.embedding.weight,
+            smoothing=sls_smoothing,
+            kernel=sls_kernel,
+            sigma=sls_sigma,
+            topk=sls_topk,
+        )
+        log_probs = F.log_softmax(logits[valid], dim=-1)
+        soft_targets = soft_target_matrix[labels[valid]].to(dtype=log_probs.dtype)
+        return -(soft_targets * log_probs).sum(dim=-1).mean()
+
+    def get_sls_soft_target_matrix(
+        self,
+        embeddings: torch.Tensor,
+        smoothing: float,
+        kernel: str,
+        sigma: Optional[float],
+        topk: int,
+    ) -> torch.Tensor:
+        if smoothing < 0 or smoothing >= 1:
+            raise ValueError(f"sls_smoothing must be in [0, 1), got {smoothing}")
+
+        cache_key = (
+            embeddings.device,
+            embeddings.dtype,
+            embeddings.shape,
+            getattr(embeddings, "_version", None),
+            float(smoothing),
+            kernel,
+            None if sigma is None else float(sigma),
+            int(topk),
+        )
+        cached = self._sls_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        with torch.no_grad():
+            distances = torch.cdist(embeddings.detach().float(), embeddings.detach().float(), p=2)
+            eye = torch.eye(distances.size(0), dtype=torch.bool, device=distances.device)
+            distances.masked_fill_(eye, float("inf"))
+
+            if sigma is None or sigma <= 0:
+                sigma_value = distances.min(dim=-1).values.median().clamp_min(1e-8)
+            else:
+                sigma_value = torch.tensor(float(sigma), device=distances.device).clamp_min(1e-8)
+
+            if kernel == "gaussian":
+                weights = torch.exp(-0.5 * (distances / sigma_value).pow(2))
+            elif kernel == "laplace":
+                weights = torch.exp(-(distances / sigma_value))
+            elif kernel == "cauchy":
+                weights = 1.0 / (1.0 + (distances / sigma_value).pow(2))
+            else:
+                raise ValueError(f"unknown SLS kernel: {kernel}")
+
+            weights.masked_fill_(eye, 0.0)
+            if topk is not None and topk > 0 and topk < weights.size(1) - 1:
+                values, indices = torch.topk(weights, k=topk, dim=-1)
+                truncated = torch.zeros_like(weights)
+                weights = truncated.scatter(1, indices, values)
+
+            row_sums = weights.sum(dim=-1, keepdim=True)
+            safe_weights = torch.where(row_sums > 0, weights / row_sums.clamp_min(1e-8), torch.zeros_like(weights))
+            soft_targets = smoothing * safe_weights
+            target_indices = torch.arange(weights.size(0), device=weights.device).unsqueeze(1)
+            target_mass = torch.where(row_sums.squeeze(1) > 0, 1.0 - smoothing, 1.0)
+            soft_targets.scatter_(1, target_indices, target_mass.unsqueeze(1))
+            soft_targets = soft_targets.to(dtype=embeddings.dtype)
+
+        self._sls_cache = {cache_key: soft_targets}
+        return soft_targets
 
     def compute_labels_world_model(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor, mask_padding: torch.BoolTensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done

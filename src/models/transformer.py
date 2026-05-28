@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import math
 from typing import Optional
 
-from einops import rearrange
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -113,7 +112,7 @@ class SelfAttention(nn.Module):
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
         y = att @ v
-        y = rearrange(y, 'b h t e -> b t (h e)')
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
 
         y = self.resid_drop(self.proj(y))
 

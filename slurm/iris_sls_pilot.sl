@@ -8,6 +8,7 @@
 #SBATCH --cpus-per-gpu 8
 #SBATCH --mem 64G
 #SBATCH --time=04:00:00
+#SBATCH --signal=B:USR1@300
 
 set -euo pipefail
 
@@ -36,6 +37,8 @@ export HYDRA_FULL_ERROR=1
 
 PYTHON=/home/2500001/ftari001/venvs/iris-sls/bin/python
 RUN_NAME="iris_${CONDITION}_${GAME}_seed${SEED}_e${EPOCHS}"
+RUN_DIR="experiments/${RUN_NAME}"
+RESUBMIT_FLAG="${RUN_DIR}/.resubmit_requested"
 
 SLS_ARGS=(
     "training.world_model.sls_smoothing=0.0"
@@ -56,7 +59,25 @@ echo "game=${GAME}"
 echo "seed=${SEED}"
 echo "epochs=${EPOCHS}"
 echo "run_name=${RUN_NAME}"
+echo "run_dir=${RUN_DIR}"
 echo "sls_args=${SLS_ARGS[*]}"
+
+handle_timeout() {
+    echo "=== USR1 received at $(date); resubmitting ${RUN_NAME} ==="
+    mkdir -p "${RUN_DIR}"
+    touch "${RESUBMIT_FLAG}"
+    sbatch --time="${IRIS_SLS_TIME_LIMIT:-08:00:00}" "$0" "$CONDITION" "$GAME" "$SEED" "$EPOCHS" "$SLS_SMOOTHING" "$SLS_TOPK"
+    kill -TERM "$TRAIN_PID" 2>/dev/null || true
+    wait "$TRAIN_PID" || true
+    exit 0
+}
+trap handle_timeout USR1
+
+RESUME_ARGS=()
+if [[ -f "${RUN_DIR}/checkpoints/epoch.pt" ]]; then
+    RESUME_ARGS=("common.resume=True" "hydra.output_subdir=null")
+    echo "=== Resuming from ${RUN_DIR}/checkpoints ==="
+fi
 
 "$PYTHON" -u src/main.py \
     "env.train.id=${GAME}" \
@@ -65,6 +86,11 @@ echo "sls_args=${SLS_ARGS[*]}"
     "common.epochs=${EPOCHS}" \
     "wandb.mode=offline" \
     "wandb.project=iris-sls-baseline" \
-    "wandb.group=pilot_ce_vs_sls" \
+    "wandb.group=e2e_ce_vs_sls" \
     "wandb.name=${RUN_NAME}" \
-    "${SLS_ARGS[@]}"
+    "hydra.run.dir=${RUN_DIR}" \
+    "${RESUME_ARGS[@]}" \
+    "${SLS_ARGS[@]}" &
+
+TRAIN_PID=$!
+wait "$TRAIN_PID"

@@ -125,8 +125,8 @@ class Trainer:
         for name in ("tokenizer", "world_model", "actor_critic"):
             component = getattr(self.agent, name)
             if name == "actor_critic":
-                component.forward_step = torch.compile(component.forward_step, mode=mode, options={"triton.cudagraphs": False})
-                print(f"compiled {name}.forward_step with torch.compile(mode={mode}, triton.cudagraphs=False)")
+                component.forward_step = torch.compile(component.forward_step, options={"triton.cudagraphs": False})
+                print(f"compiled {name}.forward_step with torch.compile(triton.cudagraphs=False)")
             else:
                 component.forward = torch.compile(component.forward, mode=mode)
                 print(f"compiled {name}.forward with torch.compile(mode={mode})")

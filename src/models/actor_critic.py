@@ -85,8 +85,8 @@ class ActorCritic(nn.Module):
         x = torch.flatten(x, start_dim=1)
 
         hx, cx = self.lstm(x, (hx, cx))
-        logits_actions = rearrange(self.actor_linear(hx), 'b a -> b 1 a')
-        means_values = rearrange(self.critic_linear(hx), 'b 1 -> b 1 1')
+        logits_actions = self.actor_linear(hx).unsqueeze(1)
+        means_values = self.critic_linear(hx).unsqueeze(1)
         return logits_actions, means_values, hx, cx
 
     def forward(self, inputs: torch.FloatTensor, mask_padding: Optional[torch.BoolTensor] = None) -> ActorCriticOutput:

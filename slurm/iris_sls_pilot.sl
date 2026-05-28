@@ -37,6 +37,8 @@ mkdir -p slurm/logs
 export PYTHONWARNINGS=ignore
 export WANDB_MODE=offline
 export HYDRA_FULL_ERROR=1
+export CPATH="/home/2500001/ftari001/include/python3.9:${CPATH:-}"
+export TORCHINDUCTOR_CACHE_DIR="/home/2500001/ftari001/.cache/torchinductor"
 
 PYTHON=/home/2500001/ftari001/venvs/iris-sls/bin/python
 COMPILE_TAG="eager"

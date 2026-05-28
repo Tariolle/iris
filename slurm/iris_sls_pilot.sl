@@ -37,10 +37,16 @@ mkdir -p slurm/logs
 export PYTHONWARNINGS=ignore
 export WANDB_MODE=offline
 export HYDRA_FULL_ERROR=1
-export CPATH="/home/2500001/ftari001/include/python3.9:${CPATH:-}"
-export TORCHINDUCTOR_CACHE_DIR="/home/2500001/ftari001/.cache/torchinductor"
+export CPATH="/home/2500001/ftari001/opt/python-3.10.20/include/python3.10:/home/2500001/ftari001/include/python3.9:${CPATH:-}"
 
-PYTHON=/home/2500001/ftari001/venvs/iris-sls/bin/python
+if [[ -z "${TORCHINDUCTOR_CACHE_DIR:-}" ]]; then
+    export TORCHINDUCTOR_CACHE_DIR="/tmp/${USER}/torchinductor_${SLURM_JOB_ID}"
+    CLEAN_TORCHINDUCTOR_CACHE=1
+fi
+mkdir -p "${TORCHINDUCTOR_CACHE_DIR}"
+trap '[[ "${CLEAN_TORCHINDUCTOR_CACHE:-0}" == "1" ]] && rm -rf "${TORCHINDUCTOR_CACHE_DIR}"' EXIT
+
+PYTHON=${PYTHON:-/home/2500001/ftari001/venvs/iris-sls-torch212/bin/python}
 COMPILE_TAG="eager"
 if [[ "$COMPILE" == "true" || "$COMPILE" == "True" ]]; then
     COMPILE_TAG="compile_${COMPILE_MODE//-/_}"

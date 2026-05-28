@@ -75,26 +75,33 @@ class ActorCritic(nn.Module):
         self.hx = self.hx[mask]
         self.cx = self.cx[mask]
 
-    def forward(self, inputs: torch.FloatTensor, mask_padding: Optional[torch.BoolTensor] = None) -> ActorCriticOutput:
+    def forward_step(self, inputs: torch.FloatTensor, hx: torch.Tensor, cx: torch.Tensor) -> tuple:
         assert inputs.ndim == 4 and inputs.shape[1:] == (3, 64, 64)
-        assert 0 <= inputs.min() <= 1 and 0 <= inputs.max() <= 1
-        assert mask_padding is None or (mask_padding.ndim == 1 and mask_padding.size(0) == inputs.size(0) and mask_padding.any())
-        x = inputs[mask_padding] if mask_padding is not None else inputs
-
-        x = x.mul(2).sub(1)
+        x = inputs.mul(2).sub(1)
         x = F.relu(self.maxp1(self.conv1(x)))
         x = F.relu(self.maxp2(self.conv2(x)))
         x = F.relu(self.maxp3(self.conv3(x)))
         x = F.relu(self.maxp4(self.conv4(x)))
         x = torch.flatten(x, start_dim=1)
 
-        if mask_padding is None:
-            self.hx, self.cx = self.lstm(x, (self.hx, self.cx))
-        else:
-            self.hx[mask_padding], self.cx[mask_padding] = self.lstm(x, (self.hx[mask_padding], self.cx[mask_padding]))
+        hx, cx = self.lstm(x, (hx, cx))
+        logits_actions = rearrange(self.actor_linear(hx), 'b a -> b 1 a')
+        means_values = rearrange(self.critic_linear(hx), 'b 1 -> b 1 1')
+        return logits_actions, means_values, hx, cx
 
-        logits_actions = rearrange(self.actor_linear(self.hx), 'b a -> b 1 a')
-        means_values = rearrange(self.critic_linear(self.hx), 'b 1 -> b 1 1')
+    def forward(self, inputs: torch.FloatTensor, mask_padding: Optional[torch.BoolTensor] = None) -> ActorCriticOutput:
+        assert inputs.ndim == 4 and inputs.shape[1:] == (3, 64, 64)
+        assert 0 <= inputs.min() <= 1 and 0 <= inputs.max() <= 1
+        assert mask_padding is None or (mask_padding.ndim == 1 and mask_padding.size(0) == inputs.size(0) and mask_padding.any())
+        x = inputs[mask_padding] if mask_padding is not None else inputs
+
+        if mask_padding is None:
+            logits_actions, means_values, hx, cx = self.forward_step(x, self.hx, self.cx)
+            self.hx, self.cx = hx.clone(), cx.clone()
+        else:
+            logits_actions, means_values, hx, cx = self.forward_step(x, self.hx[mask_padding], self.cx[mask_padding])
+            self.hx, self.cx = self.hx.clone(), self.cx.clone()
+            self.hx[mask_padding], self.cx[mask_padding] = hx.clone(), cx.clone()
 
         return ActorCriticOutput(logits_actions, means_values)
 

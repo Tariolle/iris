@@ -124,8 +124,12 @@ class Trainer:
         mode = self.cfg.common.compile_mode
         for name in ("tokenizer", "world_model", "actor_critic"):
             component = getattr(self.agent, name)
-            component.forward = torch.compile(component.forward, mode=mode)
-            print(f"compiled {name}.forward with torch.compile(mode={mode})")
+            if name == "actor_critic":
+                component.forward_step = torch.compile(component.forward_step, mode=mode)
+                print(f"compiled {name}.forward_step with torch.compile(mode={mode})")
+            else:
+                component.forward = torch.compile(component.forward, mode=mode)
+                print(f"compiled {name}.forward with torch.compile(mode={mode})")
 
     def run(self) -> None:
 

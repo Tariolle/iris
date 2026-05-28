@@ -100,7 +100,7 @@ class ActorCritic(nn.Module):
             self.hx, self.cx = hx.clone(), cx.clone()
         else:
             logits_actions, means_values, hx, cx = self.forward_step(x, self.hx[mask_padding], self.cx[mask_padding])
-            self.hx, self.cx = self.hx.clone(), self.cx.clone()
+            self.hx, self.cx = self.hx.to(dtype=hx.dtype).clone(), self.cx.to(dtype=cx.dtype).clone()
             self.hx[mask_padding], self.cx[mask_padding] = hx.clone(), cx.clone()
 
         return ActorCriticOutput(logits_actions, means_values)

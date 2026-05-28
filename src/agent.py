@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import nullcontext
 
 import torch
 from torch.distributions.categorical import Categorical
@@ -16,10 +17,25 @@ class Agent(nn.Module):
         self.tokenizer = tokenizer
         self.world_model = world_model
         self.actor_critic = actor_critic
+        self._autocast_dtype = None
 
     @property
     def device(self):
         return self.actor_critic.conv1.weight.device
+
+    def configure_runtime(self, precision: str = "float32") -> None:
+        precision = precision.lower()
+        if precision in ("float32", "fp32", "none"):
+            self._autocast_dtype = None
+        elif precision in ("bf16", "bfloat16"):
+            self._autocast_dtype = torch.bfloat16
+        else:
+            raise ValueError(f"unsupported precision: {precision}")
+
+    def autocast_context(self):
+        if self._autocast_dtype is None or self.device.type != "cuda":
+            return nullcontext()
+        return torch.autocast(device_type=self.device.type, dtype=self._autocast_dtype)
 
     def load(self, path_to_checkpoint: Path, device: torch.device, load_tokenizer: bool = True, load_world_model: bool = True, load_actor_critic: bool = True) -> None:
         agent_state_dict = torch.load(path_to_checkpoint, map_location=device)
@@ -31,7 +47,9 @@ class Agent(nn.Module):
             self.actor_critic.load_state_dict(extract_state_dict(agent_state_dict, 'actor_critic'))
 
     def act(self, obs: torch.FloatTensor, should_sample: bool = True, temperature: float = 1.0) -> torch.LongTensor:
-        input_ac = obs if self.actor_critic.use_original_obs else torch.clamp(self.tokenizer.encode_decode(obs, should_preprocess=True, should_postprocess=True), 0, 1)
-        logits_actions = self.actor_critic(input_ac).logits_actions[:, -1] / temperature
+        with self.autocast_context():
+            input_ac = obs if self.actor_critic.use_original_obs else torch.clamp(self.tokenizer.encode_decode(obs, should_preprocess=True, should_postprocess=True), 0, 1)
+            logits_actions = self.actor_critic(input_ac).logits_actions[:, -1] / temperature
+        logits_actions = logits_actions.float()
         act_token = Categorical(logits=logits_actions).sample() if should_sample else logits_actions.argmax(dim=-1)
         return act_token

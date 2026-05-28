@@ -72,11 +72,11 @@ class WorldModelEnv:
             output_sequence.append(outputs_wm.output_sequence)
 
             if k == 0:
-                reward = Categorical(logits=outputs_wm.logits_rewards).sample().float().cpu().numpy().reshape(-1) - 1   # (B,)
-                done = Categorical(logits=outputs_wm.logits_ends).sample().cpu().numpy().astype(bool).reshape(-1)       # (B,)
+                reward = Categorical(logits=outputs_wm.logits_rewards.float()).sample().float().cpu().numpy().reshape(-1) - 1   # (B,)
+                done = Categorical(logits=outputs_wm.logits_ends.float()).sample().cpu().numpy().astype(bool).reshape(-1)       # (B,)
 
             if k < self.num_observations_tokens:
-                token = Categorical(logits=outputs_wm.logits_observations).sample()
+                token = Categorical(logits=outputs_wm.logits_observations.float()).sample()
                 obs_tokens.append(token)
 
         output_sequence = torch.cat(output_sequence, dim=1)   # (B, 1 + K, E)

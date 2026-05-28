@@ -1,4 +1,5 @@
 from collections import defaultdict
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 import shutil
@@ -39,6 +40,7 @@ class Trainer:
         self.cfg = cfg
         self.start_epoch = 1
         self.device = torch.device(cfg.common.device)
+        self.autocast_dtype = self._resolve_precision(cfg.common.precision)
 
         self.ckpt_dir = Path('checkpoints')
         self.media_dir = Path('media')
@@ -83,9 +85,11 @@ class Trainer:
         world_model = WorldModel(obs_vocab_size=tokenizer.vocab_size, act_vocab_size=env.num_actions, config=instantiate(cfg.world_model))
         actor_critic = ActorCritic(**cfg.actor_critic, act_vocab_size=env.num_actions)
         self.agent = Agent(tokenizer, world_model, actor_critic).to(self.device)
+        self.agent.configure_runtime(cfg.common.precision)
         print(f'{sum(p.numel() for p in self.agent.tokenizer.parameters())} parameters in agent.tokenizer')
         print(f'{sum(p.numel() for p in self.agent.world_model.parameters())} parameters in agent.world_model')
         print(f'{sum(p.numel() for p in self.agent.actor_critic.parameters())} parameters in agent.actor_critic')
+        print(f'precision={cfg.common.precision}, compile={cfg.common.compile}, compile_mode={cfg.common.compile_mode}')
 
         self.optimizer_tokenizer = torch.optim.Adam(self.agent.tokenizer.parameters(), lr=cfg.training.learning_rate)
         self.optimizer_world_model = configure_optimizer(self.agent.world_model, cfg.training.learning_rate, cfg.training.world_model.weight_decay)
@@ -96,6 +100,32 @@ class Trainer:
 
         if cfg.common.resume:
             self.load_checkpoint()
+
+        self.compile_components()
+
+    def _resolve_precision(self, precision: str):
+        precision = precision.lower()
+        if precision in ("float32", "fp32", "none"):
+            return None
+        if precision in ("bf16", "bfloat16"):
+            return torch.bfloat16
+        raise ValueError(f"unsupported precision: {precision}")
+
+    def autocast_context(self):
+        if self.autocast_dtype is None or self.device.type != "cuda":
+            return nullcontext()
+        return torch.autocast(device_type=self.device.type, dtype=self.autocast_dtype)
+
+    def compile_components(self) -> None:
+        if not self.cfg.common.compile:
+            return
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("common.compile=True requires torch.compile, but this PyTorch build does not provide it")
+        mode = self.cfg.common.compile_mode
+        for name in ("tokenizer", "world_model", "actor_critic"):
+            component = getattr(self.agent, name)
+            component.forward = torch.compile(component.forward, mode=mode)
+            print(f"compiled {name}.forward with torch.compile(mode={mode})")
 
     def run(self) -> None:
 
@@ -158,7 +188,8 @@ class Trainer:
                 batch = self.train_dataset.sample_batch(batch_num_samples, sequence_length, sample_from_start)
                 batch = self._to_device(batch)
 
-                losses = component.compute_loss(batch, **kwargs_loss) / grad_acc_steps
+                with self.autocast_context():
+                    losses = component.compute_loss(batch, **kwargs_loss) / grad_acc_steps
                 loss_total_step = losses.loss_total
                 loss_total_step.backward()
                 loss_total_epoch += loss_total_step.item() / steps_per_epoch
@@ -209,7 +240,8 @@ class Trainer:
         for batch in self.test_dataset.traverse(batch_num_samples, sequence_length):
             batch = self._to_device(batch)
 
-            losses = component.compute_loss(batch, **kwargs_loss)
+            with self.autocast_context():
+                losses = component.compute_loss(batch, **kwargs_loss)
             loss_total_epoch += losses.loss_total.item()
 
             for loss_name, loss_value in losses.intermediate_losses.items():
@@ -226,7 +258,8 @@ class Trainer:
     def inspect_imagination(self, epoch: int) -> None:
         mode_str = 'imagination'
         batch = self.test_dataset.sample_batch(batch_num_samples=self.episode_manager_imagination.max_num_episodes, sequence_length=1 + self.cfg.training.actor_critic.burn_in, sample_from_start=False)
-        outputs = self.agent.actor_critic.imagine(self._to_device(batch), self.agent.tokenizer, self.agent.world_model, horizon=self.cfg.evaluation.actor_critic.horizon, show_pbar=True)
+        with self.autocast_context():
+            outputs = self.agent.actor_critic.imagine(self._to_device(batch), self.agent.tokenizer, self.agent.world_model, horizon=self.cfg.evaluation.actor_critic.horizon, show_pbar=True)
 
         to_log = []
         for i, (o, a, r, d) in enumerate(zip(outputs.observations.cpu(), outputs.actions.cpu(), outputs.rewards.cpu(), outputs.ends.long().cpu())):  # Make everything (N, T, ...) instead of (T, N, ...)

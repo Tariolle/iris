@@ -112,7 +112,7 @@ class ActorCritic(nn.Module):
 
         values = outputs.values[:, :-1]
 
-        d = Categorical(logits=outputs.logits_actions[:, :-1])
+        d = Categorical(logits=outputs.logits_actions[:, :-1].float())
         log_probs = d.log_prob(outputs.actions[:, :-1])
         loss_actions = -1 * (log_probs * (lambda_returns - values.detach())).mean()
         loss_entropy = - entropy_weight * d.entropy().mean()
@@ -145,7 +145,7 @@ class ActorCritic(nn.Module):
             all_observations.append(obs)
 
             outputs_ac = self(obs)
-            action_token = Categorical(logits=outputs_ac.logits_actions).sample()
+            action_token = Categorical(logits=outputs_ac.logits_actions.float()).sample()
             obs, reward, done, _ = wm_env.step(action_token, should_predict_next_obs=(k < horizon - 1))
 
             all_actions.append(action_token)

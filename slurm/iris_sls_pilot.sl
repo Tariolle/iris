@@ -13,8 +13,8 @@
 set -euo pipefail
 
 # Usage:
-#   sbatch slurm/iris_sls_pilot.sl ce  PongNoFrameskip-v4 0 35
-#   sbatch slurm/iris_sls_pilot.sl sls PongNoFrameskip-v4 0 35
+#   sbatch slurm/iris_sls_pilot.sl ce  PongNoFrameskip-v4 0 35 0.1 16 bf16 true reduce-overhead
+#   sbatch slurm/iris_sls_pilot.sl sls PongNoFrameskip-v4 0 35 0.1 16 bf16 true reduce-overhead
 
 CONDITION=${1:-ce}
 GAME=${2:-PongNoFrameskip-v4}
@@ -22,6 +22,9 @@ SEED=${3:-0}
 EPOCHS=${4:-35}
 SLS_SMOOTHING=${5:-0.1}
 SLS_TOPK=${6:-16}
+PRECISION=${7:-bf16}
+COMPILE=${8:-true}
+COMPILE_MODE=${9:-reduce-overhead}
 
 if [[ "$CONDITION" != "ce" && "$CONDITION" != "sls" ]]; then
     echo "condition must be 'ce' or 'sls', got: $CONDITION" >&2
@@ -36,7 +39,11 @@ export WANDB_MODE=offline
 export HYDRA_FULL_ERROR=1
 
 PYTHON=/home/2500001/ftari001/venvs/iris-sls/bin/python
-RUN_NAME="iris_${CONDITION}_${GAME}_seed${SEED}_e${EPOCHS}"
+COMPILE_TAG="eager"
+if [[ "$COMPILE" == "true" || "$COMPILE" == "True" ]]; then
+    COMPILE_TAG="compile_${COMPILE_MODE//-/_}"
+fi
+RUN_NAME="iris_${CONDITION}_${GAME}_seed${SEED}_e${EPOCHS}_${PRECISION}_${COMPILE_TAG}"
 RUN_DIR="experiments/${RUN_NAME}"
 RESUBMIT_FLAG="${RUN_DIR}/.resubmit_requested"
 
@@ -58,6 +65,9 @@ echo "=== IRIS ${CONDITION} pilot ==="
 echo "game=${GAME}"
 echo "seed=${SEED}"
 echo "epochs=${EPOCHS}"
+echo "precision=${PRECISION}"
+echo "compile=${COMPILE}"
+echo "compile_mode=${COMPILE_MODE}"
 echo "run_name=${RUN_NAME}"
 echo "run_dir=${RUN_DIR}"
 echo "sls_args=${SLS_ARGS[*]}"
@@ -66,7 +76,7 @@ handle_timeout() {
     echo "=== USR1 received at $(date); resubmitting ${RUN_NAME} ==="
     mkdir -p "${RUN_DIR}"
     touch "${RESUBMIT_FLAG}"
-    sbatch --time="${IRIS_SLS_TIME_LIMIT:-08:00:00}" "$0" "$CONDITION" "$GAME" "$SEED" "$EPOCHS" "$SLS_SMOOTHING" "$SLS_TOPK"
+    sbatch --time="${IRIS_SLS_TIME_LIMIT:-08:00:00}" "$0" "$CONDITION" "$GAME" "$SEED" "$EPOCHS" "$SLS_SMOOTHING" "$SLS_TOPK" "$PRECISION" "$COMPILE" "$COMPILE_MODE"
     kill -TERM "$TRAIN_PID" 2>/dev/null || true
     wait "$TRAIN_PID" || true
     exit 0
@@ -84,6 +94,9 @@ fi
     "common.device=cuda:0" \
     "common.seed=${SEED}" \
     "common.epochs=${EPOCHS}" \
+    "common.precision=${PRECISION}" \
+    "common.compile=${COMPILE}" \
+    "common.compile_mode=${COMPILE_MODE}" \
     "wandb.mode=offline" \
     "wandb.project=iris-sls-baseline" \
     "wandb.group=e2e_ce_vs_sls" \

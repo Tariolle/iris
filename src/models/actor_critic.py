@@ -77,6 +77,7 @@ class ActorCritic(nn.Module):
 
     def forward_step(self, inputs: torch.FloatTensor, hx: torch.Tensor, cx: torch.Tensor) -> tuple:
         assert inputs.ndim == 4 and inputs.shape[1:] == (3, 64, 64)
+        inputs = inputs.to(dtype=self.conv1.weight.dtype)
         x = inputs.mul(2).sub(1)
         x = F.relu(self.maxp1(self.conv1(x)))
         x = F.relu(self.maxp2(self.conv2(x)))

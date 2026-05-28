@@ -70,6 +70,13 @@ def set_seed(seed):
     random.seed(seed)
 
 
+def mark_cudagraph_step() -> None:
+    compiler = getattr(torch, "compiler", None)
+    marker = getattr(compiler, "cudagraph_mark_step_begin", None) if compiler is not None else None
+    if marker is not None:
+        marker()
+
+
 def remove_dir(path, should_ask=False):
     assert path.is_dir()
     if (not should_ask) or input(f"Remove directory : {path} ? [Y/n] ").lower() != 'n':

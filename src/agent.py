@@ -8,7 +8,7 @@ import torch.nn as nn
 from models.actor_critic import ActorCritic
 from models.tokenizer import Tokenizer
 from models.world_model import WorldModel
-from utils import extract_state_dict
+from utils import extract_state_dict, mark_cudagraph_step
 
 
 class Agent(nn.Module):
@@ -49,6 +49,7 @@ class Agent(nn.Module):
     def act(self, obs: torch.FloatTensor, should_sample: bool = True, temperature: float = 1.0) -> torch.LongTensor:
         with self.autocast_context():
             input_ac = obs if self.actor_critic.use_original_obs else torch.clamp(self.tokenizer.encode_decode(obs, should_preprocess=True, should_postprocess=True), 0, 1)
+            mark_cudagraph_step()
             logits_actions = self.actor_critic(input_ac).logits_actions[:, -1] / temperature
         logits_actions = logits_actions.float()
         act_token = Categorical(logits=logits_actions).sample() if should_sample else logits_actions.argmax(dim=-1)

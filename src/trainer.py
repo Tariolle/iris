@@ -22,7 +22,7 @@ from episode import Episode
 from make_reconstructions import make_reconstructions_from_batch
 from models.actor_critic import ActorCritic
 from models.world_model import WorldModel
-from utils import configure_optimizer, EpisodeDirManager, set_seed
+from utils import configure_optimizer, EpisodeDirManager, set_seed, mark_cudagraph_step
 
 
 class Trainer:
@@ -189,6 +189,7 @@ class Trainer:
                 batch = self._to_device(batch)
 
                 with self.autocast_context():
+                    mark_cudagraph_step()
                     losses = component.compute_loss(batch, **kwargs_loss) / grad_acc_steps
                 loss_total_step = losses.loss_total
                 loss_total_step.backward()
@@ -241,6 +242,7 @@ class Trainer:
             batch = self._to_device(batch)
 
             with self.autocast_context():
+                mark_cudagraph_step()
                 losses = component.compute_loss(batch, **kwargs_loss)
             loss_total_epoch += losses.loss_total.item()
 

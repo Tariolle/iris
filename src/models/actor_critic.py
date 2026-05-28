@@ -14,7 +14,7 @@ from dataset import Batch
 from envs.world_model_env import WorldModelEnv
 from models.tokenizer import Tokenizer
 from models.world_model import WorldModel
-from utils import compute_lambda_returns, LossWithIntermediateLosses
+from utils import compute_lambda_returns, LossWithIntermediateLosses, mark_cudagraph_step
 
 
 @dataclass
@@ -68,6 +68,7 @@ class ActorCritic(nn.Module):
             for i in range(burnin_observations.size(1)):
                 if mask_padding[:, i].any():
                     with torch.no_grad():
+                        mark_cudagraph_step()
                         self(burnin_observations[:, i], mask_padding[:, i])
 
     def prune(self, mask: np.ndarray) -> None:
@@ -144,6 +145,7 @@ class ActorCritic(nn.Module):
 
             all_observations.append(obs)
 
+            mark_cudagraph_step()
             outputs_ac = self(obs)
             action_token = Categorical(logits=outputs_ac.logits_actions.float()).sample()
             obs, reward, done, _ = wm_env.step(action_token, should_predict_next_obs=(k < horizon - 1))

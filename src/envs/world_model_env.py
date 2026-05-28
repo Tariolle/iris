@@ -9,6 +9,8 @@ import torch
 from torch.distributions.categorical import Categorical
 import torchvision
 
+from utils import mark_cudagraph_step
+
 
 class WorldModelEnv:
 
@@ -49,6 +51,7 @@ class WorldModelEnv:
         n, num_observations_tokens = obs_tokens.shape
         assert num_observations_tokens == self.num_observations_tokens
         self.keys_values_wm = self.world_model.transformer.generate_empty_keys_values(n=n, max_tokens=self.world_model.config.max_tokens)
+        mark_cudagraph_step()
         outputs_wm = self.world_model(obs_tokens, past_keys_values=self.keys_values_wm)
         return outputs_wm.output_sequence  # (B, K, E)
 
@@ -68,6 +71,7 @@ class WorldModelEnv:
 
         for k in range(num_passes):  # assumption that there is only one action token.
 
+            mark_cudagraph_step()
             outputs_wm = self.world_model(token, past_keys_values=self.keys_values_wm)
             output_sequence.append(outputs_wm.output_sequence)
 

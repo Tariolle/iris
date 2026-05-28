@@ -103,7 +103,7 @@ class ActorCritic(nn.Module):
             self.hx, self.cx = self.hx.to(dtype=hx.dtype).clone(), self.cx.to(dtype=cx.dtype).clone()
             self.hx[mask_padding], self.cx[mask_padding] = hx.clone(), cx.clone()
 
-        return ActorCriticOutput(logits_actions, means_values)
+        return ActorCriticOutput(logits_actions.clone(), means_values.clone())
 
     def compute_loss(self, batch: Batch, tokenizer: Tokenizer, world_model: WorldModel, imagine_horizon: int, gamma: float, lambda_: float, entropy_weight: float, **kwargs: Any) -> LossWithIntermediateLosses:
         assert not self.use_original_obs

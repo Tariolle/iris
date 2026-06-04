@@ -1,6 +1,7 @@
 from collections import defaultdict
 from contextlib import nullcontext
 from functools import partial
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -131,6 +132,31 @@ class Trainer:
                 component.forward = torch.compile(component.forward, mode=mode)
                 print(f"compiled {name}.forward with torch.compile(mode={mode})")
 
+    @staticmethod
+    def scheduled_sls_smoothing(epoch: int, cfg_world_model: DictConfig) -> float:
+        smoothing = float(cfg_world_model.sls_smoothing)
+        schedule = cfg_world_model.get("sls_schedule", None)
+        if schedule is None or not bool(schedule.get("enabled", False)):
+            return smoothing
+
+        start_epoch = int(schedule.get("start_epoch", 0))
+        end_epoch = int(schedule.get("end_epoch", start_epoch))
+        final_smoothing = float(schedule.get("final_smoothing", 0.0))
+        if epoch <= start_epoch:
+            return smoothing
+        if epoch >= end_epoch:
+            return final_smoothing
+
+        progress = (epoch - start_epoch) / max(1, end_epoch - start_epoch)
+        kind = str(schedule.get("kind", "cosine"))
+        if kind == "cosine":
+            weight = 0.5 * (1.0 + math.cos(math.pi * progress))
+        elif kind == "linear":
+            weight = 1.0 - progress
+        else:
+            raise ValueError(f"unknown SLS schedule kind: {kind}")
+        return final_smoothing + (smoothing - final_smoothing) * weight
+
     def run(self) -> None:
 
         for epoch in range(self.start_epoch, 1 + self.cfg.common.epochs):
@@ -173,8 +199,13 @@ class Trainer:
         self.agent.tokenizer.eval()
 
         if epoch > cfg_world_model.start_after_epochs:
-            metrics_world_model = self.train_component(self.agent.world_model, self.optimizer_world_model, sequence_length=self.cfg.common.sequence_length, sample_from_start=True, tokenizer=self.agent.tokenizer, **cfg_world_model)
+            cfg_world_model_loss = OmegaConf.to_container(cfg_world_model, resolve=True)
+            cfg_world_model_loss["sls_smoothing"] = self.scheduled_sls_smoothing(epoch, cfg_world_model)
+            metrics_world_model = self.train_component(self.agent.world_model, self.optimizer_world_model, sequence_length=self.cfg.common.sequence_length, sample_from_start=True, tokenizer=self.agent.tokenizer, **cfg_world_model_loss)
         self.agent.world_model.eval()
+
+        if metrics_world_model:
+            metrics_world_model["world_model/train/sls_smoothing"] = float(self.scheduled_sls_smoothing(epoch, cfg_world_model))
 
         if epoch > cfg_actor_critic.start_after_epochs:
             metrics_actor_critic = self.train_component(self.agent.actor_critic, self.optimizer_actor_critic, sequence_length=1 + self.cfg.training.actor_critic.burn_in, sample_from_start=False, tokenizer=self.agent.tokenizer, world_model=self.agent.world_model, **cfg_actor_critic)

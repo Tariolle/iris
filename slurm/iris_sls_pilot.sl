@@ -15,6 +15,7 @@ set -euo pipefail
 # Usage:
 #   sbatch slurm/iris_sls_pilot.sl ce  PongNoFrameskip-v4 0 35 0.1 16 bf16 true reduce-overhead
 #   sbatch slurm/iris_sls_pilot.sl sls PongNoFrameskip-v4 0 35 0.1 16 bf16 true reduce-overhead
+#   sbatch slurm/iris_sls_pilot.sl sls_anneal PongNoFrameskip-v4 0 600 0.1 16 bf16 true reduce-overhead
 
 CONDITION=${1:-ce}
 GAME=${2:-PongNoFrameskip-v4}
@@ -26,8 +27,8 @@ PRECISION=${7:-bf16}
 COMPILE=${8:-true}
 COMPILE_MODE=${9:-reduce-overhead}
 
-if [[ "$CONDITION" != "ce" && "$CONDITION" != "sls" ]]; then
-    echo "condition must be 'ce' or 'sls', got: $CONDITION" >&2
+if [[ "$CONDITION" != "ce" && "$CONDITION" != "sls" && "$CONDITION" != "sls_anneal" ]]; then
+    echo "condition must be 'ce', 'sls', or 'sls_anneal', got: $CONDITION" >&2
     exit 2
 fi
 
@@ -60,13 +61,22 @@ SLS_ARGS=(
     "training.world_model.sls_topk=0"
 )
 
-if [[ "$CONDITION" == "sls" ]]; then
+if [[ "$CONDITION" == "sls" || "$CONDITION" == "sls_anneal" ]]; then
     SLS_ARGS=(
         "training.world_model.sls_smoothing=${SLS_SMOOTHING}"
         "training.world_model.sls_kernel=gaussian"
         "training.world_model.sls_sigma=null"
         "training.world_model.sls_topk=${SLS_TOPK}"
     )
+    if [[ "$CONDITION" == "sls_anneal" ]]; then
+        SLS_ARGS+=(
+            "training.world_model.sls_schedule.enabled=true"
+            "training.world_model.sls_schedule.kind=cosine"
+            "training.world_model.sls_schedule.start_epoch=250"
+            "training.world_model.sls_schedule.end_epoch=450"
+            "training.world_model.sls_schedule.final_smoothing=0.0"
+        )
+    fi
 fi
 
 echo "=== IRIS ${CONDITION} pilot ==="

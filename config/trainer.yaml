@@ -71,6 +71,12 @@ training:
     sls_kernel: gaussian
     sls_sigma: null
     sls_topk: 0
+    sls_schedule:
+      enabled: false
+      kind: cosine
+      start_epoch: 250
+      end_epoch: 450
+      final_smoothing: 0.0
     start_after_epochs: 25
     steps_per_epoch: 200
   actor_critic:
